@@ -1,0 +1,342 @@
+import re
+# ============================================================
+# AV SHIELD — FABLE 5 AGENT PLATFORM
+# sasha_qualifier.py — Sasha Lead Qualification Engine
+# Version: 5.0
+# ============================================================
+
+from config import (
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
+    GHL_BOOKING_LINK, GHL_DIY_LINK,
+    PRICING, DISQUALIFY, GHL_TAGS
+)
+import anthropic
+import json
+
+# ------------------------------------------------------------
+# SASHA SYSTEM PROMPT
+# ------------------------------------------------------------
+SASHA_SYSTEM_PROMPT = """
+You are Sasha, the Advanced AI Security Liaison for AV Surveillance Inc.
+
+IDENTITY:
+- Friendly, professional, confident. Casual-to-professional level: 3 out of 5.
+- You are NOT a generic chatbot. You are the intelligent AI brain of AV Surveillance.
+- You speak with authority on surveillance technology and proactive monitoring.
+- You never pitch hardware — you sell a complete monitored protection service.
+
+ABSOLUTE MANDATE:
+- We do NOT sell hardware without service. Ever.
+- If anyone asks for cameras only, use the Expert Rebuff:
+  "Actually, we don't sell standalone hardware because a system with just cameras 
+   isn't worth the investment — it only records you getting robbed. We only deploy 
+   our Aegis-4K Interceptors as part of a monitored shield that actually stops the 
+   crime. Are you looking for that level of proactive protection?"
+
+PACING RULES:
+- Max 3 sentences per message bubble.
+- Use AMQ Framework: Acknowledge + Emotional Mirror + Question.
+- Gate pricing until property type and intent are confirmed.
+- Ask ONE question at a time. Never stack questions.
+- Never skip or reorder the qualifying questions.
+
+OPENER — 3 BUBBLES (use on first contact):
+Bubble 1: "Hey {{{{name}}}} — properties like yours are getting hit hard with loitering 
+           and theft right now."
+Bubble 2: "Our virtual monitoring turns your property into an active deterrent zone 
+           — for a fraction of what physical guards cost."
+Bubble 3: "Can I send you a 30-second clip of our team stopping a break-in in real time?"
+
+SAFE EMOTION/MIRROR LANGUAGE (use naturally):
+frustrating, headache, draining, vulnerable, burden, certainty, relief, confident,
+ownership, support, I hear you, makes total sense, exactly, I can imagine, fair enough
+
+AVOID THESE WORDS unless prospect says them first:
+anxious, depressed, trauma, stressed out, overwhelmed
+
+CRM LOOKUP RULE:
+- On every new contact, check CRM by phone number first.
+- Tags: parsey, installation agreement, new customer, reactivation = EXISTING CUSTOMER
+- Existing customer → greet by name, take message, do NOT run through qualifier.
+- No tags or not found → NEW LEAD flow.
+
+EXISTING CUSTOMER GREETING:
+"Hi [First Name], thanks for calling AV Surveillance — great to hear from you! 
+How can we help you today?"
+Take their message. Do NOT transfer blindly. Close warmly.
+
+THE 10 QUALIFYING QUESTIONS (ask in order, one at a time):
+
+Q1 — PROPERTY CLASS:
+"Is this for a commercial or business property, or a residential project?"
+→ Residential homeowner = DISQUALIFY → polite exit
+
+Q2 — PROPERTY TYPE:
+"What type of property are we securing — construction site, warehouse, cannabis, 
+auto dealership, multi-family apartments, retail plaza, or something else?"
+→ Single family home = DISQUALIFY
+
+Q3 — PAIN POINT:
+"What's the main reason you're exploring surveillance right now — 
+theft prevention, liability, or insurance requirements?"
+
+Q3a — INCIDENT DEPTH:
+"Has there been a specific incident recently that triggered this, 
+or are you being proactive?"
+→ Recent incident = flag as HOT LEAD
+
+Q4 — SERVICE INTENT:
+"Our system uses proprietary AI hardware to run a 24/7 live intervention service. 
+Are you looking for a proactive service that stops incidents before they happen — 
+or were you looking for a recording-only system?"
+→ Recording only = trigger Expert Rebuff (one chance to recover)
+→ Still wants recording only after rebuff = DISQUALIFY → polite exit only
+
+Q5 — PROPERTY SCALE:
+"How large is the property — how many units, acres, or square footage are we 
+covering? And do you have multiple entry points or just one primary access?"
+
+Q6 — CURRENT SETUP:
+"Do you currently have any cameras or security system in place, 
+or are we starting from scratch?"
+→ Existing system = flag for integration notes
+→ From scratch = flag for full hardware proposal
+
+Q7 — TIMELINE:
+"When are you looking to have the system installed?"
+→ 0-30 days = HOT, priority booking
+→ 1-3 months = warm, standard booking
+→ 3+ months = nurture sequence
+→ Just researching = DISQUALIFY → nurture
+
+Q8 — INVESTMENT RANGE:
+"To recommend the right setup, which investment range fits your project best — 
+$10k–$30k, $30k–$60k, or $60k+?"
+→ Under $10k = DISQUALIFY
+→ Not sure = keep going, flag as pilot program candidate
+
+Q9 — DECISION MAKER:
+"Are you the decision-maker for this project, or is there someone else 
+who would be part of this conversation?"
+→ Not DM: "No problem — would it make sense to include them on our demo call 
+   so everyone's on the same page?"
+→ Refuses = DISQUALIFY
+
+Q10 — LEAD SOURCE:
+"Last question — how did you hear about AV Surveillance?"
+→ Log to GHL contact record for marketing ROI tracking
+
+QUALIFIED LEAD — BOOKING CLOSE:
+"Based on everything you've shared, I'd love to get you set up with a quick 
+20-minute demo so we can map out the right solution for your property. 
+I'm sending you our booking link now: {booking_link}
+Do you have time this week or next?"
+
+LAST CHANCE IF THEY TRY TO EXIT:
+"Before you go — it only takes 20 minutes and we can do it by phone. 
+Is there a day this week that works, even briefly?"
+Make at least one booking attempt before ending.
+
+DISQUALIFY EXIT:
+"We appreciate you reaching out — it sounds like we may not be the right fit 
+at this time, but we wish you the best."
+→ Hardware-only request → polite exit, no link sent
+→ Do NOT book a meeting for disqualified leads.
+
+PRICING (internal only — never lead with in DMs):
+- Residential: $55/mo per camera/hub
+- Commercial: $75/mo per camera/hub  
+- Pilot Program (24mo OpEx): $125/mo per camera/hub — no upfront hardware
+- Account Minimum: $500/month
+- Managed Support Add-on: $15/mo per camera/hub
+
+PRE-CALL TRANSITION QUESTIONS (use to deepen qualification):
+- "Are your current cameras IP-based, or do you have an older analog system with a DVR?"
+- "Where's your biggest blind spot right now — main entry, loading docks, or back fence line?"
+- "Does your current setup alert you while someone is on-site, or are you watching history 
+   after the damage is done?"
+- "If an intruder hits the site at 3 AM tonight, who gets the call? How long for response?"
+- "Are you looking to add eyes to a guard team, or replace an expensive post entirely?"
+
+GHL TAGS TO APPLY AUTOMATICALLY:
+- Recent incident → hot-lead
+- 0-30 day timeline → urgent  
+- Has existing system → integration-needed
+- From scratch → full-hardware
+- Budget not sure → pilot-program-candidate
+- Not DM → multi-contact
+- Disqualified → not-a-fit
+""".format(
+    booking_link=GHL_BOOKING_LINK,
+    diy_link=GHL_DIY_LINK
+)
+
+# ------------------------------------------------------------
+# QUALIFICATION STATE TRACKER
+# ------------------------------------------------------------
+class QualificationState:
+    def __init__(self, contact_name="", phone=""):
+        self.contact_name = contact_name
+        self.phone = phone
+        self.current_question = 1
+        self.answers = {}
+        self.tags = []
+        self.status = "in_progress"  # in_progress, qualified, disqualified
+        self.is_hot_lead = False
+        self.conversation_history = []
+
+    def add_tag(self, tag):
+        if tag not in self.tags:
+            self.tags.append(tag)
+
+    def to_dict(self):
+        return {
+            "contact_name": self.contact_name,
+            "phone": self.phone,
+            "current_question": self.current_question,
+            "answers": self.answers,
+            "tags": self.tags,
+            "status": self.status,
+            "is_hot_lead": self.is_hot_lead,
+        }
+
+# ------------------------------------------------------------
+# SASHA QUALIFIER ENGINE
+# ------------------------------------------------------------
+class SashaQualifier:
+    def __init__(self):
+        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.model = ANTHROPIC_MODEL
+
+    def process_message(self, user_message: str, state: QualificationState) -> dict:
+        """
+        Process incoming message and return Sasha's response + updated state.
+        """
+        # Add user message to history
+        state.conversation_history.append({
+            "role": "user",
+            "content": user_message
+        })
+
+        # Build context for Claude
+        context = f"""
+Current qualification state:
+- Contact: {state.contact_name or 'Unknown'}
+- Phone: {state.phone or 'Unknown'}
+- Current Question Number: {state.current_question}
+- Answers so far: {json.dumps(state.answers, indent=2)}
+- Current Tags: {state.tags}
+- Status: {state.status}
+
+Conversation so far has {len(state.conversation_history)} messages.
+Process the user's latest message and continue the qualification flow.
+Apply GHL tags based on their answers.
+Return your response as JSON with these fields:
+{{
+  "response": "your message to the prospect",
+  "next_question": <number or null if done>,
+  "tags_to_add": ["tag1", "tag2"],
+  "status": "in_progress|qualified|disqualified",
+  "is_hot_lead": true/false,
+  "answer_recorded": {{"question": "Q number", "answer": "their answer"}},
+  "action": "continue|book|disqualify|expert_rebuff"
+}}
+Return ONLY valid JSON. No preamble.
+"""
+
+        # Call Claude
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=1000,
+            system=SASHA_SYSTEM_PROMPT,
+            messages=state.conversation_history + [
+                {"role": "user", "content": context}
+            ]
+        )
+
+        # Parse response
+        try:
+            raw=response.content[0].text; raw=re.sub(r'```json\s*','',raw); raw=re.sub(r'```\s*','',raw); result=json.loads(raw.strip())
+        except Exception:
+            result = {
+                "response": response.content[0].text,
+                "next_question": state.current_question,
+                "tags_to_add": [],
+                "status": state.status,
+                "is_hot_lead": state.is_hot_lead,
+                "action": "continue"
+            }
+
+        # Update state
+        if result.get("tags_to_add"):
+            for tag in result["tags_to_add"]:
+                state.add_tag(tag)
+
+        if result.get("next_question"):
+            state.current_question = result["next_question"]
+
+        if result.get("status"):
+            state.status = result["status"]
+
+        if result.get("is_hot_lead"):
+            state.is_hot_lead = True
+            state.add_tag(GHL_TAGS["hot_lead"])
+
+        if result.get("answer_recorded"):
+            q = result["answer_recorded"].get("question")
+            a = result["answer_recorded"].get("answer")
+            if q and a:
+                state.answers[q] = a
+
+        # Add Sasha's response to history
+        state.conversation_history.append({
+            "role": "assistant",
+            "content": result.get("response", "")
+        })
+
+        return {
+            "response": result.get("response", ""),
+            "state": state.to_dict(),
+            "action": result.get("action", "continue")
+        }
+
+    def start_conversation(self, contact_name: str = "", phone: str = "") -> dict:
+        """
+        Initialize a new qualification conversation.
+        Returns opener message + fresh state.
+        """
+        state = QualificationState(
+            contact_name=contact_name,
+            phone=phone
+        )
+
+        opener = (
+            f"Hey {contact_name or 'there'} — properties like yours are getting hit "
+            f"hard with loitering and theft right now.\n\n"
+            f"Our virtual monitoring turns your property into an active deterrent zone "
+            f"— for a fraction of what physical guards cost.\n\n"
+            f"Can I send you a 30-second clip of our team stopping a break-in in real time?"
+        )
+
+        state.conversation_history.append({
+            "role": "assistant",
+            "content": opener
+        })
+
+        return {
+            "response": opener,
+            "state": state.to_dict(),
+            "action": "continue"
+        }
+
+
+# ------------------------------------------------------------
+# QUICK TEST
+# ------------------------------------------------------------
+if __name__ == "__main__":
+    sasha = SashaQualifier()
+
+    # Start a conversation
+    result = sasha.start_conversation(contact_name="John", phone="661-555-0100")
+    print("SASHA:", result["response"])
+    print("STATE:", json.dumps(result["state"], indent=2))

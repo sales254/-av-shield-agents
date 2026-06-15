@@ -1,0 +1,53 @@
+# ============================================================
+# AV SHIELD — FABLE 5 AGENT PLATFORM
+# .gitignore — Never commit these to GitHub
+# ============================================================
+
+# Environment & credentials — NEVER push these
+.env
+*.env
+config_local.py
+
+# Google credentials
+gmail_token.json
+gmail_credentials.json
+google_service_account.json
+*_credentials.json
+*_token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+env/
+.venv/
+
+# Logs
+*.log
+logs/
+
+# Audio temp files — Voice Agent
+/tmp/*.mp3
+/tmp/*.wav
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Test output
+test_results/
+*.test.json
+.env 
+.env.txt 
+config.py 

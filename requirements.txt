@@ -1,0 +1,75 @@
+# ============================================================
+# AV SHIELD — FABLE 5 AGENT PLATFORM
+# requirements.txt — Python Dependencies
+# Install: pip install -r requirements.txt
+# ============================================================
+
+# ------------------------------------------------------------
+# CORE AI
+# ------------------------------------------------------------
+anthropic>=0.25.0                  # Claude API — all agents
+
+# ------------------------------------------------------------
+# WEB SERVER — Voice Agent
+# ------------------------------------------------------------
+flask>=3.0.0                       # Voice webhook server
+gunicorn>=21.2.0                   # Production WSGI server
+
+# ------------------------------------------------------------
+# TWILIO — SMS + Voice
+# ------------------------------------------------------------
+twilio>=8.0.0                      # SMS + inbound/outbound calls
+
+# ------------------------------------------------------------
+# GOOGLE — Gmail + Maps + Workspace
+# ------------------------------------------------------------
+google-auth>=2.28.0                # Google authentication
+google-auth-oauthlib>=1.2.0        # OAuth flow for Gmail
+google-auth-httplib2>=0.2.0        # HTTP transport
+google-api-python-client>=2.120.0  # Gmail + Drive API
+google-auth-stubs>=0.2.0           # Type stubs
+
+# ------------------------------------------------------------
+# HTTP REQUESTS — GHL + ElevenLabs + Maps
+# ------------------------------------------------------------
+requests>=2.31.0                   # All external API calls
+httpx>=0.27.0                      # Async HTTP (for future async agents)
+
+# ------------------------------------------------------------
+# EMAIL PARSING
+# ------------------------------------------------------------
+python-dotenv>=1.0.0               # Load .env file on startup
+
+# ------------------------------------------------------------
+# SCHEDULING — Run agents on schedule
+# ------------------------------------------------------------
+apscheduler>=3.10.0                # Cron-style job scheduler
+                                   # Runs: inbox check, daily report,
+                                   # content calendar, health checks
+
+# ------------------------------------------------------------
+# DATA + UTILITIES
+# ------------------------------------------------------------
+python-dateutil>=2.8.2             # Date parsing
+pytz>=2024.1                       # Timezone handling (LA/Pacific)
+
+# ------------------------------------------------------------
+# LOGGING + MONITORING
+# ------------------------------------------------------------
+loguru>=0.7.2                      # Better logging
+
+# ------------------------------------------------------------
+# IMAGE PROCESSING — Visual Survey Agent
+# ------------------------------------------------------------
+Pillow>=10.2.0                     # Image handling for property photos
+
+# ------------------------------------------------------------
+# SECURITY
+# ------------------------------------------------------------
+cryptography>=42.0.0               # Secure credential handling
+
+# ------------------------------------------------------------
+# PRODUCTION ONLY
+# ------------------------------------------------------------
+supervisor>=4.2.0                  # Keeps agents running 24/7
+                                   # Auto-restarts on crash

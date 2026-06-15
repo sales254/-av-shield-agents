@@ -1,0 +1,5 @@
+f = open('voice_agent.py', encoding='utf-8').read()
+f = f.replace('{name}', '{{name}}')
+f = f.replace('{First Name}', '{{First Name}}')
+open('voice_agent.py', 'w', encoding='utf-8').write(f)
+print('Done')

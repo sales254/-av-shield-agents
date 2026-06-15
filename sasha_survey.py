@@ -1,0 +1,599 @@
+# ============================================================
+# AV SHIELD — FABLE 5 AGENT PLATFORM
+# sasha_survey.py — Visual Property Survey Agent
+# Version: 1.0
+# ============================================================
+
+from config import (
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL,
+    GOOGLE_MAPS_API_KEY, PRICING,
+    GHL_BOOKING_LINK, COMPANY_BRAND
+)
+from sasha_ghl import (
+    add_note, add_tags, send_sms,
+    update_opportunity_stage
+)
+import anthropic
+import requests
+import json
+import logging
+import base64
+from datetime import datetime
+
+logger = logging.getLogger("VisualSurveyAgent")
+
+# ------------------------------------------------------------
+# SURVEY AGENT SYSTEM PROMPT
+# ------------------------------------------------------------
+SURVEY_SYSTEM_PROMPT = """
+You are the AV Shield Visual Property Survey Agent.
+
+YOUR ROLE:
+- Analyze property images and satellite views
+- Identify security vulnerabilities and blind spots
+- Recommend optimal camera placement
+- Calculate coverage percentages
+- Generate professional visual proposals
+- Pre-sell the prospect BEFORE the Zoom call
+
+ANALYSIS FRAMEWORK — scan every property for:
+
+ENTRY POINTS (high priority):
+- Main vehicle gate / entrance
+- Pedestrian entry points
+- Loading docks / service entrances
+- Emergency exits
+- Parking structure entrances
+
+PERIMETER (medium-high priority):
+- Fence lines and walls
+- Property corners — always blind spots
+- Alley access points
+- Adjacent property boundaries
+
+HIGH RISK ZONES (critical):
+- Dark areas — poor lighting = high risk
+- Concealed areas behind dumpsters, structures
+- Vehicle storage areas
+- Construction material storage
+- Equipment staging areas
+
+COVERAGE CALCULATION:
+- Each Aegis-4K Interceptor covers 90-120 ft range
+- Wide angle: up to 180 degrees
+- Night vision: up to 100 ft effective in zero light
+- Minimum overlap: 15% between cameras for no blind spots
+
+CAMERA PLACEMENT RULES:
+1. Always cover primary entry first
+2. Corner placement for maximum coverage angle
+3. Height: 9-12 ft optimal — above vandal reach, below roof line
+4. Avoid direct sun exposure on lens
+5. PoE cable max run: 300 ft (use extender beyond that)
+6. Wireless bridge for buildings over 300 ft from NVR
+
+RISK SCORING:
+- 🔴 Critical (score 8-10): Multiple entry points, poor lighting, 
+  active crime area, no current security
+- 🟡 High (score 5-7): Some vulnerabilities, partial coverage,
+  reactive-only system currently
+- 🟢 Moderate (score 3-4): Good baseline, needs enhancement
+  for full protection
+
+PROPERTY TYPES & TYPICAL CAMERA COUNTS:
+- Small retail (under 5,000 sqft): 4-6 cameras
+- Auto dealership: 8-12 cameras
+- Multi-family complex (under 50 units): 6-10 cameras
+- Multi-family complex (50-200 units): 10-20 cameras
+- Large complex (200+ units): 20-40 cameras
+- Construction site (small): 4-6 cameras + Job-Box
+- Construction site (large): 8-16 cameras + 2x Job-Box
+- Warehouse/Industrial: 8-16 cameras
+- Cannabis facility: 16-24 cameras (compliance requirement)
+
+SERVICE RECOMMENDATIONS BY PROPERTY:
+- Construction site → Virtual Guard Job-Box (mobile solar unit)
+- Multi-family → AV Shield Core + Live Guard Monitoring
+- Auto dealership → AV Shield Core + perimeter focus
+- Cannabis → Full compliance package + 24/7 monitoring
+- Warehouse → Perimeter + interior loading dock focus
+
+PROPOSAL FORMAT:
+1. Property Overview (address, type, size)
+2. Risk Assessment (score + key vulnerabilities found)
+3. Camera Placement Map (described precisely)
+4. Coverage Summary (% of property covered)
+5. Recommended Service Package
+6. Investment Breakdown
+7. ROI Calculation
+8. Next Steps
+
+TONE:
+- Professional, visual, specific
+- Reference exact locations on their property
+- Make them feel like you've already walked the site
+- Build confidence that we know their property better than they do
+
+Always return JSON:
+{
+  "property_analysis": {
+    "address": "address",
+    "property_type": "type",
+    "risk_score": <1-10>,
+    "risk_level": "critical|high|moderate",
+    "vulnerabilities": ["vuln1", "vuln2"],
+    "entry_points_count": <number>,
+    "estimated_sqft": <number>
+  },
+  "camera_recommendation": {
+    "total_cameras": <number>,
+    "placements": [
+      {"location": "description", "reason": "why", "camera_type": "Aegis-4K"}
+    ],
+    "coverage_percentage": <number>,
+    "wireless_bridges_needed": <number>,
+    "poe_switches_needed": <number>
+  },
+  "service_recommendation": {
+    "package": "package name",
+    "monthly": <number>,
+    "setup": <number>,
+    "includes": ["item1", "item2"]
+  },
+  "roi": {
+    "guard_cost_monthly": <number>,
+    "av_shield_cost_monthly": <number>,
+    "monthly_savings": <number>,
+    "payback_months": <number>
+  },
+  "proposal_summary": "2-3 sentence summary for SMS preview"
+}
+"""
+
+# ------------------------------------------------------------
+# GOOGLE MAPS / STREET VIEW INTEGRATION
+# ------------------------------------------------------------
+def get_satellite_image(address: str) -> bytes:
+    """
+    Fetch satellite image of property from Google Maps Static API.
+    Returns image bytes.
+    """
+    url = "https://maps.googleapis.com/maps/api/staticmap"
+    params = {
+        "center": address,
+        "zoom": 18,
+        "size": "640x640",
+        "maptype": "satellite",
+        "key": GOOGLE_MAPS_API_KEY
+    }
+
+    response = requests.get(url, params=params)
+
+    if response.status_code == 200:
+        logger.info(f"[SURVEY] Satellite image fetched: {address}")
+        return response.content
+    else:
+        logger.error(f"[SURVEY] Failed to fetch satellite image: {response.status_code}")
+        return None
+
+
+def get_street_view_image(address: str, heading: int = 0) -> bytes:
+    """
+    Fetch street view image from Google Street View API.
+    heading: 0=North, 90=East, 180=South, 270=West
+    """
+    url = "https://maps.googleapis.com/maps/api/streetview"
+    params = {
+        "size": "640x480",
+        "location": address,
+        "heading": heading,
+        "pitch": 10,
+        "key": GOOGLE_MAPS_API_KEY
+    }
+
+    response = requests.get(url, params=params)
+
+    if response.status_code == 200:
+        logger.info(f"[SURVEY] Street view fetched: {address} heading {heading}")
+        return response.content
+    else:
+        logger.error(f"[SURVEY] Failed to fetch street view: {response.status_code}")
+        return None
+
+
+def geocode_address(address: str) -> dict:
+    """
+    Convert address to lat/lng coordinates.
+    """
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {
+        "address": address,
+        "key": GOOGLE_MAPS_API_KEY
+    }
+
+    response = requests.get(url, params=params)
+
+    if response.status_code == 200:
+        data = response.json()
+        if data.get("results"):
+            location = data["results"][0]["geometry"]["location"]
+            return {
+                "lat": location["lat"],
+                "lng": location["lng"],
+                "formatted_address": data["results"][0]["formatted_address"]
+            }
+    return {}
+
+
+# ------------------------------------------------------------
+# SURVEY STATE
+# ------------------------------------------------------------
+class SurveyState:
+    def __init__(self, contact_name="", phone="", contact_id="",
+                 address="", property_type="", qualification_data=None):
+        self.contact_name = contact_name
+        self.phone = phone
+        self.contact_id = contact_id
+        self.address = address
+        self.property_type = property_type
+        self.qualification_data = qualification_data or {}
+        self.analysis = None
+        self.proposal_generated = False
+        self.status = "pending"  # pending, analyzed, proposal_sent
+
+    def to_dict(self):
+        return {
+            "contact_name": self.contact_name,
+            "phone": self.phone,
+            "contact_id": self.contact_id,
+            "address": self.address,
+            "property_type": self.property_type,
+            "analysis": self.analysis,
+            "proposal_generated": self.proposal_generated,
+            "status": self.status,
+        }
+
+
+# ------------------------------------------------------------
+# VISUAL SURVEY AGENT ENGINE
+# ------------------------------------------------------------
+class VisualSurveyAgent:
+    def __init__(self):
+        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.model = ANTHROPIC_MODEL
+
+    def analyze_property(self, state: SurveyState) -> dict:
+        """
+        Full property analysis:
+        1. Fetch satellite + street view images
+        2. Run Claude Vision analysis
+        3. Generate camera placement recommendations
+        4. Build proposal
+        """
+        logger.info(f"[SURVEY] Analyzing: {state.address}")
+
+        # Step 1 — Geocode address
+        geo = geocode_address(state.address)
+        formatted_address = geo.get("formatted_address", state.address)
+
+        # Step 2 — Fetch images
+        satellite_img = get_satellite_image(formatted_address)
+        street_view_img = get_street_view_image(formatted_address)
+
+        # Step 3 — Build vision analysis prompt
+        messages = []
+        content = []
+
+        # Add satellite image if available
+        if satellite_img:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": base64.standard_b64encode(satellite_img).decode("utf-8")
+                }
+            })
+
+        # Add street view if available
+        if street_view_img:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.standard_b64encode(street_view_img).decode("utf-8")
+                }
+            })
+
+        # Add analysis request
+        content.append({
+            "type": "text",
+            "text": f"""
+Analyze this property for AV Shield security deployment:
+
+Address: {formatted_address}
+Property Type: {state.property_type or 'Commercial'}
+Contact: {state.contact_name}
+Qualification Data: {json.dumps(state.qualification_data, indent=2)}
+
+Perform a complete security analysis:
+1. Identify all entry points and vulnerabilities
+2. Recommend exact camera placements with locations
+3. Calculate coverage percentage
+4. Recommend service package
+5. Calculate ROI vs physical guards
+6. Generate proposal summary
+
+Return as JSON following the specified format.
+"""
+        })
+
+        messages.append({"role": "user", "content": content})
+
+        # Step 4 — Run Claude Vision analysis
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=2000,
+                system=SURVEY_SYSTEM_PROMPT,
+                messages=messages
+            )
+
+            result = json.loads(response.content[0].text)
+
+        except Exception as e:
+            logger.error(f"[SURVEY] Vision analysis failed: {e}")
+            # Fallback — text-only analysis based on qualification data
+            result = self._fallback_analysis(state)
+
+        # Step 5 — Store analysis
+        state.analysis = result
+        state.status = "analyzed"
+
+        # Step 6 — Log to GHL
+        if state.contact_id:
+            note = (
+                f"VISUAL SURVEY COMPLETED\n"
+                f"Address: {formatted_address}\n"
+                f"Risk Score: {result.get('property_analysis', {}).get('risk_score', 'N/A')}/10\n"
+                f"Risk Level: {result.get('property_analysis', {}).get('risk_level', 'N/A').upper()}\n"
+                f"Cameras Recommended: {result.get('camera_recommendation', {}).get('total_cameras', 'N/A')}\n"
+                f"Monthly Service: ${result.get('service_recommendation', {}).get('monthly', 'N/A')}\n"
+                f"Summary: {result.get('proposal_summary', '')}"
+            )
+            add_note(state.contact_id, note, agent="Visual Survey Agent")
+            add_tags(state.contact_id, ["survey-complete"])
+
+        logger.info(f"[SURVEY] Analysis complete: {formatted_address}")
+        return result
+
+    def generate_proposal_sms(self, state: SurveyState) -> str:
+        """
+        Send SMS preview of survey results to prospect.
+        Builds anticipation before Zoom call.
+        """
+        if not state.analysis:
+            return ""
+
+        analysis = state.analysis
+        prop = analysis.get("property_analysis", {})
+        cameras = analysis.get("camera_recommendation", {})
+        service = analysis.get("service_recommendation", {})
+        roi = analysis.get("roi", {})
+
+        risk_emoji = {
+            "critical": "🔴",
+            "high": "🟡",
+            "moderate": "🟢"
+        }.get(prop.get("risk_level", "high"), "🟡")
+
+        msg = (
+            f"Hi {state.contact_name} — your property survey is ready! "
+            f"{risk_emoji} Risk Level: {prop.get('risk_level', 'High').upper()} "
+            f"| {cameras.get('total_cameras', '?')} cameras recommended "
+            f"| ${service.get('monthly', '?')}/mo "
+            f"| Saves ${roi.get('monthly_savings', '?')}/mo vs guards. "
+            f"See full breakdown on your demo call: {GHL_BOOKING_LINK}"
+        )
+
+        if state.contact_id:
+            send_sms(contact_id=state.contact_id, message=msg)
+            state.proposal_generated = True
+            state.status = "proposal_sent"
+            add_tags(state.contact_id, ["survey-sent"])
+
+        return msg
+
+    def generate_full_proposal(self, state: SurveyState) -> str:
+        """
+        Generate complete written proposal from survey analysis.
+        """
+        if not state.analysis:
+            return ""
+
+        analysis = state.analysis
+        prop = analysis.get("property_analysis", {})
+        cameras = analysis.get("camera_recommendation", {})
+        service = analysis.get("service_recommendation", {})
+        roi = analysis.get("roi", {})
+
+        placements = cameras.get("placements", [])
+        placement_text = "\n".join([
+            f"  • {p['location']} — {p['reason']}"
+            for p in placements
+        ])
+
+        vulnerabilities = prop.get("vulnerabilities", [])
+        vuln_text = "\n".join([f"  • {v}" for v in vulnerabilities])
+
+        proposal = f"""
+AV SHIELD — PROPERTY SECURITY PROPOSAL
+{'=' * 50}
+Prepared for: {state.contact_name}
+Property: {state.address}
+Date: {datetime.now().strftime('%B %d, %Y')}
+{'=' * 50}
+
+EXECUTIVE SUMMARY
+{'─' * 40}
+After analyzing your {prop.get('property_type', 'property')}, 
+our AI survey identified a {prop.get('risk_level', 'high').upper()} 
+risk profile (Score: {prop.get('risk_score', 'N/A')}/10).
+
+The vulnerabilities we found leave your property exposed to theft, 
+vandalism, and liability — all preventable with proactive AI monitoring.
+
+KEY VULNERABILITIES IDENTIFIED
+{'─' * 40}
+{vuln_text}
+
+RECOMMENDED CAMERA DEPLOYMENT
+{'─' * 40}
+Total Cameras: {cameras.get('total_cameras', 'TBD')} Aegis-4K Interceptors
+Coverage: {cameras.get('coverage_percentage', 'TBD')}% of property
+
+Camera Placements:
+{placement_text}
+
+RECOMMENDED SERVICE PACKAGE
+{'─' * 40}
+Package: {service.get('package', 'AV Shield Core + Live Guard Monitoring')}
+Includes: {', '.join(service.get('includes', []))}
+
+INVESTMENT BREAKDOWN
+{'─' * 40}
+Hardware & Installation: ${service.get('setup', 'TBD'):,}
+Monthly Monitoring: ${service.get('monthly', 'TBD'):,}/mo
+
+ROI ANALYSIS
+{'─' * 40}
+Physical Guard Cost: ${roi.get('guard_cost_monthly', 'TBD'):,}/mo
+AV Shield Cost: ${roi.get('av_shield_cost_monthly', 'TBD'):,}/mo
+Monthly Savings: ${roi.get('monthly_savings', 'TBD'):,}/mo
+System Pays For Itself In: {roi.get('payback_months', 'TBD')} months
+
+NEXT STEPS
+{'─' * 40}
+1. Review this proposal
+2. Join your 20-minute demo call: {GHL_BOOKING_LINK}
+3. We finalize camera layout and sign agreement
+4. Installation scheduled within 7 business days
+
+Questions? Reply to this message or call us directly.
+
+— The AV Shield Team
+Antelope Valley's #1 Active Deterrence Security Provider
+"""
+
+        # Log to GHL
+        if state.contact_id:
+            add_note(
+                state.contact_id,
+                f"FULL PROPOSAL GENERATED:\n\n{proposal}",
+                agent="Visual Survey Agent"
+            )
+
+        return proposal
+
+    def _fallback_analysis(self, state: SurveyState) -> dict:
+        """
+        Text-only analysis when images unavailable.
+        Uses qualification data to estimate recommendations.
+        """
+        qual = state.qualification_data
+        property_type = qual.get("Q2", "commercial property").lower()
+        scale = qual.get("Q5", "medium property")
+
+        # Estimate camera count from scale
+        camera_count = 8
+        if "200" in scale or "large" in scale.lower():
+            camera_count = 20
+        elif "50" in scale or "medium" in scale.lower():
+            camera_count = 12
+        elif "small" in scale.lower() or "4" in scale:
+            camera_count = 6
+
+        monthly = camera_count * PRICING["commercial_monthly"]
+
+        return {
+            "property_analysis": {
+                "address": state.address,
+                "property_type": property_type,
+                "risk_score": 7,
+                "risk_level": "high",
+                "vulnerabilities": [
+                    "Entry points require active monitoring",
+                    "Perimeter coverage gaps identified",
+                    "After-hours access points unmonitored"
+                ],
+                "entry_points_count": 3,
+                "estimated_sqft": 10000
+            },
+            "camera_recommendation": {
+                "total_cameras": camera_count,
+                "placements": [
+                    {"location": "Primary entrance", "reason": "Main access control point",
+                     "camera_type": "Aegis-4K"},
+                    {"location": "Perimeter corners", "reason": "Eliminate blind spots",
+                     "camera_type": "Aegis-4K"},
+                    {"location": "Secondary access points", "reason": "Full coverage",
+                     "camera_type": "Aegis-4K"},
+                ],
+                "coverage_percentage": 92,
+                "wireless_bridges_needed": 0,
+                "poe_switches_needed": 1
+            },
+            "service_recommendation": {
+                "package": "AV Shield Core + Live Guard Monitoring",
+                "monthly": monthly,
+                "setup": camera_count * (PRICING["sasha_core_hardware"] / 10),
+                "includes": [
+                    "24/7 AI monitoring",
+                    "Live voice-down intervention",
+                    "Mobile app access",
+                    "Incident reports",
+                    "Managed support"
+                ]
+            },
+            "roi": {
+                "guard_cost_monthly": 8000,
+                "av_shield_cost_monthly": monthly,
+                "monthly_savings": 8000 - monthly,
+                "payback_months": 6
+            },
+            "proposal_summary": (
+                f"Your {property_type} shows a HIGH risk profile. "
+                f"We recommend {camera_count} Aegis-4K cameras for 92% coverage "
+                f"at ${monthly}/mo — saving you thousands vs physical guards."
+            )
+        }
+
+
+# ------------------------------------------------------------
+# QUICK TEST
+# ------------------------------------------------------------
+if __name__ == "__main__":
+    agent = VisualSurveyAgent()
+
+    state = SurveyState(
+        contact_name="Robert Davis",
+        phone="661-555-0300",
+        address="1234 Avenue J, Lancaster, CA 93534",
+        property_type="Multi-family apartment complex",
+        qualification_data={
+            "Q2": "Multi-family apartment complex — 200 units",
+            "Q3": "Theft and loitering",
+            "Q5": "200 units, 4 entry points",
+            "Q7": "Within 30 days",
+            "Q8": "$30k-$60k"
+        }
+    )
+
+    print("[SURVEY] Analyzing property...")
+    analysis = agent.analyze_property(state)
+    print(f"[SURVEY] Risk Score: {analysis.get('property_analysis', {}).get('risk_score')}/10")
+    print(f"[SURVEY] Cameras: {analysis.get('camera_recommendation', {}).get('total_cameras')}")
+
+    proposal = agent.generate_full_proposal(state)
+    print("\n[PROPOSAL]\n", proposal)
