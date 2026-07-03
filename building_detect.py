@@ -11,6 +11,7 @@
 # ============================================================
 
 import io
+import os
 import re
 import json
 import base64
@@ -24,11 +25,15 @@ except Exception:  # library not installed / import error
     anthropic = None
 
 try:
-    from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+    from config import ANTHROPIC_API_KEY
 except Exception:
-    import os
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+# Footprint detection needs precise vision. Sonnet boxes the parcel instead of
+# the roofline on cluttered multi-wing properties; Opus 4.8 boxes the roof
+# consistently, so detection defaults to it independent of the global agent
+# model. Override with BUILDING_DETECT_MODEL if needed.
+DETECT_MODEL = os.getenv("BUILDING_DETECT_MODEL", "claude-opus-4-8")
 
 log = logging.getLogger("building_detect")
 
@@ -38,15 +43,24 @@ _INSET = 0.04
 
 _VISION_SYSTEM = (
     "You are a remote-sensing assistant. You are given a top-down satellite "
-    "image. Identify the single main building footprint of the property being "
+    "image. Identify the main building footprint of the property being "
     "surveyed — the largest/most central permanent structure (house, warehouse, "
-    "or main commercial building). Ignore driveways, pools, sheds, trees, cars, "
-    "roads, and neighboring buildings.\n\n"
+    "apartment complex, or main commercial building).\n\n"
+    "IMPORTANT: many properties have L-, U-, or E-shaped buildings, or several "
+    "connected wings sharing one roofline. Treat ALL connected wings of the "
+    "primary structure as ONE building and return the union bounding box that "
+    "encloses every wing. Do NOT box just one wing.\n\n"
+    "Exclude driveways, parking lots, pools, sheds, detached garages, trees, "
+    "cars, roads, and buildings on neighboring parcels. Also exclude carports, "
+    "shade canopies, and any long narrow roof strips covering parking stalls — "
+    "those are not part of the main building even when attached to the parcel.\n\n"
     "Return ONLY a JSON object, no prose, of the form:\n"
     '{"found": true, "box": {"x0": 0.0, "y0": 0.0, "x1": 1.0, "y1": 1.0}}\n\n'
     "Coordinates are normalized to [0,1] with the origin at the TOP-LEFT of the "
     "image: x increases to the right, y increases downward. box is the tight "
-    "axis-aligned bounding rectangle around the roof of that one building. "
+    "axis-aligned bounding rectangle around the roof(s) of that one structure — "
+    "the box edges should touch the outermost roof edges, not the surrounding "
+    "pavement or lot lines. "
     'If no clear building is visible, return {"found": false}.'
 )
 
@@ -110,7 +124,7 @@ def detect_building_box(image, img_size=640, api_key=None, model=None):
 
         client = anthropic.Anthropic(api_key=key)
         resp = client.messages.create(
-            model=model or ANTHROPIC_MODEL,
+            model=model or DETECT_MODEL,
             max_tokens=300,
             system=_VISION_SYSTEM,
             messages=[{
