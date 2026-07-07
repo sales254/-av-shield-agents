@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""
+AV Shield MCP Server — exposes create_estimate and send_estimate to Claude.
+Run: venv/bin/python mcp_server.py
+Listens on 0.0.0.0:5001 (nginx proxies /mcp to this port).
+"""
+import json, os, sys
+sys.path.insert(0, '/root/-av-shield-agents')
+import sasha_ghl, requests
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("AV Shield Estimator", host="0.0.0.0", port=5001, streamable_http_path="/mcp", stateless_http=True, json_response=True)
+
+FIRE_KEY = os.environ.get("FIRE_KEY", "avshield2026")
+
+@mcp.tool()
+def create_estimate(customer_name: str, cameras: int, phone: str = "", email: str = "", build: str = "wireless") -> str:
+    """
+    Create a draft estimate in GHL for a customer.
+    Looks up customer by name. If phone/email missing from GHL, supply them.
+    Returns price breakdown and estimate ID.
+    """
+    r = requests.get(
+        f"{sasha_ghl.GHL_BASE_URL}/contacts/",
+        headers=sasha_ghl._est_headers(),
+        params={"locationId": sasha_ghl.GHL_LOCATION_ID, "query": customer_name, "limit": 5}
+    )
+    contacts = r.json().get("contacts", [])
+    if not contacts:
+        return json.dumps({"status": "not_found", "message": f"No contact found for '{customer_name}'. Ask for phone and email to proceed."})
+    c = contacts[0]
+    cname = (c.get("contactName") or (c.get("firstName","")+" "+c.get("lastName","")).strip())[:40]
+    ph = phone or c.get("phone") or ""
+    em = email or c.get("email") or ""
+    if not ph:
+        return json.dumps({"status": "needs_info", "customer": cname, "message": f"{cname} found but no phone on file. Please provide phone (and email)."})
+    contact = {"id": c.get("id"), "name": cname, "phone": ph, "email": em}
+    import asyncio, concurrent.futures
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        result = await loop.run_in_executor(pool, lambda: sasha_ghl.create_estimate(cameras, contact, build=build))
+    if not result:
+        return json.dumps({"status": "error", "message": "Estimate creation failed. Check webhook.log."})
+    return json.dumps({
+        "status": "draft_created",
+        "customer": cname,
+        "cameras": cameras,
+        "install": result.get("install"),
+        "monthly": result.get("monthly"),
+        "total": result.get("total"),
+        "estimate_id": result.get("id"),
+        "message": f"Draft created for {cname}: ${result.get('install'):,.2f} install + ${result.get('monthly'):,.2f}/mo. Review in GHL then say 'send it' when ready."
+    })
+
+@mcp.tool()
+def send_estimate(customer_name: str) -> str:
+    """
+    Send an existing draft estimate to a customer.
+    Looks up customer by name, finds their draft, and sends it.
+    """
+    r = requests.get(
+        f"{sasha_ghl.GHL_BASE_URL}/contacts/",
+        headers=sasha_ghl._est_headers(),
+        params={"locationId": sasha_ghl.GHL_LOCATION_ID, "query": customer_name, "limit": 5}
+    )
+    contacts = r.json().get("contacts", [])
+    if not contacts:
+        return json.dumps({"status": "not_found", "message": f"No contact found for '{customer_name}'."})
+    c = contacts[0]
+    cname = (c.get("contactName") or (c.get("firstName","")+" "+c.get("lastName","")).strip())
+    eid = sasha_ghl.find_draft_for_contact(c.get("id"))
+    if not eid:
+        return json.dumps({"status": "no_draft", "customer": cname, "message": f"No draft estimate found for {cname}. Create one first."})
+    import asyncio, concurrent.futures
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        sent = await loop.run_in_executor(pool, lambda: sasha_ghl.send_estimate(eid))
+    if not sent:
+        return json.dumps({"status": "error", "message": f"Failed to send estimate for {cname}."})
+    return json.dumps({"status": "sent", "customer": cname, "estimate_id": eid, "message": f"Estimate sent to {cname}."})
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http")

@@ -518,22 +518,9 @@ def get_send_user_id():
 def run_bid(cameras, build="wireless", tier="Industrial"):
     job = {"cameraRuns": {"standard": cameras}, "environmentTier": tier, "buildMode": build,
            "monitoringType": "commercial", "cableType": "CMR", "projectName": f"{cameras}cam"}
-    import asyncio as _aio
-    async def _run():
-        proc = await _aio.create_subprocess_exec(
-            "node", "-e",
-            "const{runBid}=require('/root/estimator-agent/estimator');runBid(" + json.dumps(job) + ").then(b=>console.log(JSON.stringify(b)));",
-            cwd="/root/estimator-agent",
-            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE)
-        stdout, stderr = await proc.communicate()
-        return stdout.decode()
-    try:
-        loop = _aio.get_running_loop()
-        import concurrent.futures as _cf
-        with _cf.ThreadPoolExecutor() as pool:
-            out = loop.run_until_complete(_aio.ensure_future(_run()))
-    except RuntimeError:
-        out = _aio.run(_run())
+    out = _sp.check_output(["node", "-e",
+        "const{runBid}=require('/root/estimator-agent/estimator');runBid(" + json.dumps(job) + ").then(b=>console.log(JSON.stringify(b)));"],
+        cwd="/root/estimator-agent").decode()
     return json.loads(out.strip().splitlines()[-1])
 
 def bid_to_items(bid):
@@ -560,7 +547,7 @@ def create_estimate(cameras, contact, build="wireless"):
             "name": (f"{contact.get('name','Customer')} - {cameras} Cam Estimate")[:40],
             "currency": "USD", "estimateNumber": num, "estimateNumberPrefix": "EST-",
             "estimateStatus": "draft", "liveMode": True,
-            "issueDate": (t - _td(days=1)).strftime("%Y-%m-%d"), "expiryDate": (t + _td(days=30)).strftime("%Y-%m-%d"),
+            "issueDate": t.strftime("%Y-%m-%d"), "expiryDate": (t + _td(days=30)).strftime("%Y-%m-%d"),
             "discount": {"value": 0, "type": "percentage"}, "frequencySettings": {"enabled": False},
             "businessDetails": {"name": "AV Surveillance Inc.", "phoneNo": "+12135664399"},
             "contactDetails": {"id": contact.get("id"), "name": contact.get("name", "Customer"),
@@ -586,22 +573,8 @@ def find_draft_for_contact(contact_id):
 
 def send_estimate(estimate_id):
     uid = get_send_user_id()
-    # fetch the estimate to get the recipient email/phone
-    lr = requests.get(f"{GHL_BASE_URL}/invoices/estimate/list", headers=_est_headers(),
-                      params={"altId": GHL_LOCATION_ID, "altType": "location", "limit": 50, "offset": 0})
-    email, phone = "", ""
-    for e in lr.json().get("estimates", []):
-        if e.get("_id") == estimate_id:
-            cd = e.get("contactDetails") or {}
-            email = cd.get("email", "") or ""
-            phone = cd.get("phoneNo", "") or ""
-            break
-    sent_to = {"email": [email] if email else [], "emailCc": [], "emailBcc": [],
-               "phoneNo": [phone] if phone else []}
-    body = {"altId": GHL_LOCATION_ID, "altType": "location", "action": "sms_and_email",
-            "liveMode": True, "userId": uid, "sentTo": sent_to,
-            "estimateName": "ESTIMATE"}
+    body = {"altId": GHL_LOCATION_ID, "altType": "location", "action": "send_manually",
+            "liveMode": True, "userId": uid}
     r = requests.post(f"{GHL_BASE_URL}/invoices/estimate/{estimate_id}/send",
                       headers=_est_headers(), data=json.dumps(body))
-    print(f"[send] action=sms_and_email status={r.status_code} email={email!r}", flush=True)
     return r.status_code in (200, 201)

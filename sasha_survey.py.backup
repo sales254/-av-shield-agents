@@ -11,7 +11,7 @@ from config import (
 )
 from sasha_ghl import (
     add_note, add_tags, send_sms,
-    update_opportunity_stage, upload_media, upload_to_contact
+    update_opportunity_stage
 )
 import anthropic
 import requests
@@ -279,33 +279,6 @@ class VisualSurveyAgent:
         # Step 2 — Fetch images
         satellite_img = get_satellite_image(formatted_address)
         street_view_img = get_street_view_image(formatted_address)
-        survey_image_url = ""
-        try:
-            if satellite_img:
-                _safe = "".join(c if c.isalnum() else "_" for c in formatted_address)[:50]
-                _img_path = f"/root/-av-shield-agents/survey_{_safe}.png"
-                with open(_img_path, "wb") as _f:
-                    _f.write(satellite_img)
-                _upload_path = _img_path
-                try:
-                    import survey_overlay, property_survey as _ps
-                    _lat = geo.get("lat", 0)
-                    _qual = state.qualification_data or {}
-                    _area = _qual.get("Q5") or _qual.get("area_sqft") or 0
-                    _zoom = _ps.zoom_for_area(_lat, _ps._coerce_int(_area, 0)) if _lat else 19
-                    _ov = survey_overlay.render_camera_overlay(
-                        satellite_img, _lat, _zoom, _qual,
-                        out_path=f"/root/-av-shield-agents/survey_{_safe}_layout.png")
-                    if _ov:
-                        _upload_path = _ov
-                except Exception as _oe:
-                    logger.error(f"[SURVEY] overlay failed, using plain image: {_oe}")
-                survey_image_url = upload_media(_upload_path)
-                if state.contact_id:
-                    upload_to_contact(_upload_path, state.contact_id)
-        except Exception as _e:
-            logger.error(f"[SURVEY] image upload failed: {_e}")
-        state.survey_image_url = survey_image_url
 
         # Step 3 — Build vision analysis prompt
         messages = []
@@ -367,20 +340,12 @@ Return as JSON following the specified format.
                 messages=messages
             )
 
+            import re as _re
             _raw = response.content[0].text
-            _raw = _raw.replace("```json", "").replace("```", "").strip()
-            _start = _raw.find("{")
-            _depth = 0
-            _end = -1
-            for _i in range(_start, len(_raw)):
-                if _raw[_i] == "{":
-                    _depth += 1
-                elif _raw[_i] == "}":
-                    _depth -= 1
-                    if _depth == 0:
-                        _end = _i + 1
-                        break
-            result = json.loads(_raw[_start:_end])
+            _raw = _re.sub(r"```json\s*", "", _raw)
+            _raw = _re.sub(r"```\s*", "", _raw)
+            _m = _re.search(r"\{.*\}", _raw, _re.DOTALL)
+            result = json.loads(_m.group(0) if _m else _raw.strip())
 
         except Exception as e:
             logger.error(f"[SURVEY] Vision analysis failed: {e}")
@@ -400,8 +365,7 @@ Return as JSON following the specified format.
                 f"Risk Level: {result.get('property_analysis', {}).get('risk_level', 'N/A').upper()}\n"
                 f"Cameras Recommended: {result.get('camera_recommendation', {}).get('total_cameras', 'N/A')}\n"
                 f"Monthly Service: ${result.get('service_recommendation', {}).get('monthly', 'N/A')}\n"
-                f"Summary: {result.get('proposal_summary', '')}\n"
-                f"Property Image: {getattr(state, 'survey_image_url', '') or 'N/A'}"
+                f"Summary: {result.get('proposal_summary', '')}"
             )
             add_note(state.contact_id, note, agent="Visual Survey Agent")
             add_tags(state.contact_id, ["survey-complete"])

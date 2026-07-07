@@ -1,0 +1,129 @@
+# ============================================================
+# AV SHIELD — survey_trigger.py
+# Fires the Visual Survey when Sasha QUALIFIES a lead with an
+# address. Texts Shad for one-tap approval before the prospect
+# sees anything.
+# ============================================================
+
+import logging
+
+log = logging.getLogger("survey_trigger")
+
+ADDRESS_KEYS = ["address", "Q5b", "property_address"]
+
+
+def extract_address(state) -> str:
+    answers = getattr(state, "answers", {}) or {}
+    for k in ADDRESS_KEYS:
+        v = answers.get(k)
+        if v and len(str(v).strip()) > 5:
+            return str(v).strip()
+    return ""
+
+
+def extract_property_type(state) -> str:
+    answers = getattr(state, "answers", {}) or {}
+    for k in ["Q2", "property_type", "Q1"]:
+        v = answers.get(k)
+        if v:
+            return str(v)
+    return ""
+
+
+def should_run_survey(state) -> bool:
+    if getattr(state, "status", "") != "qualified":
+        return False
+    if getattr(state, "survey_done", False):
+        return False
+    return bool(extract_address(state))
+
+
+def run_survey_for_state(state, agent, send_sms, escalation_phone, pending_store) -> dict:
+    from sasha_survey import VisualSurveyAgent, SurveyState
+
+    address = extract_address(state)
+    prospect_phone = getattr(state, "phone", "") or ""
+    name = getattr(state, "contact_name", "") or "the prospect"
+
+    survey_state = SurveyState(
+        contact_name=name,
+        phone=prospect_phone,
+        contact_id=getattr(state, "contact_id", "") or "",
+        address=address,
+        property_type=extract_property_type(state),
+        qualification_data=getattr(state, "answers", {}) or {},
+    )
+
+    analysis = agent.analyze_property(survey_state)
+    proposal = agent.generate_full_proposal(survey_state)
+
+    cams = (analysis or {}).get("camera_recommendation", {}).get("total_cameras", "?")
+
+    pending_store[prospect_phone] = {
+        "prospect_phone": prospect_phone,
+        "prospect_name": name,
+        "proposal": proposal,
+        "analysis": analysis,
+        "approved": False,
+    }
+    state.survey_done = True
+
+    last4 = prospect_phone[-4:] if len(prospect_phone) >= 4 else prospect_phone
+    review_msg = (
+        f"SURVEY READY for {name} ({prospect_phone}).\n"
+        f"~{cams} cameras. Address: {address}\n\n"
+        f"Reply 'YES {last4}' to send the proposal to the prospect, "
+        f"or 'NO {last4}' to hold."
+    )
+    try:
+        send_sms(escalation_phone, review_msg)
+        log.info("Sent survey approval request to %s for prospect %s",
+                 escalation_phone, prospect_phone)
+    except Exception as e:
+        log.error("Failed to send approval request: %s", e)
+
+    return {"surveyed": True, "cameras": cams, "awaiting_approval": True,
+            "prospect_phone": prospect_phone}
+
+
+def handle_approval_reply(message, from_phone, escalation_phone, send_sms, pending_store):
+    if not from_phone or _norm(from_phone) != _norm(escalation_phone):
+        return None
+    text = (message or "").strip().lower()
+    if not (text.startswith("yes") or text.startswith("no")):
+        return None
+
+    decision = "yes" if text.startswith("yes") else "no"
+    digits = "".join(c for c in text if c.isdigit())
+    target = None
+    if digits:
+        for ph, item in pending_store.items():
+            if ph.endswith(digits[-4:]):
+                target = ph
+                break
+    if target is None and len(pending_store) == 1:
+        target = next(iter(pending_store))
+
+    if target is None:
+        send_sms(escalation_phone,
+                 "Couldn't match that approval to a pending survey. "
+                 "Reply 'YES <last4>' with the prospect's last 4 digits.")
+        return {"matched": False}
+
+    item = pending_store.pop(target)
+    if decision == "no":
+        log.info("Survey HELD for %s by Shad", target)
+        return {"matched": True, "decision": "no", "prospect_phone": target}
+
+    try:
+        send_sms(item["prospect_phone"], item["proposal"])
+        send_sms(escalation_phone, f"Sent. Proposal delivered to {item['prospect_name']}.")
+        log.info("Proposal sent to prospect %s after approval", target)
+    except Exception as e:
+        log.error("Failed sending approved proposal: %s", e)
+        send_sms(escalation_phone, f"Error sending to prospect: {e}")
+    return {"matched": True, "decision": "yes", "prospect_phone": target}
+
+
+def _norm(phone):
+    return "".join(c for c in str(phone) if c.isdigit())[-10:]

@@ -12,7 +12,6 @@ from config import (
 )
 import anthropic
 import json
-from dq_guard import hard_disqualify_confirmed
 
 # ------------------------------------------------------------
 # SASHA SYSTEM PROMPT
@@ -96,13 +95,6 @@ or were you looking for a recording-only system?"
 Q5 — PROPERTY SCALE:
 "How large is the property — how many units, acres, or square footage are we 
 covering? And do you have multiple entry points or just one primary access?"
-
-Q5b — PROPERTY ADDRESS:
-"Perfect. What's the property address? I'll pull up a satellite view and map out 
-exactly where your cameras should go before our call."
-→ Record the full street address under answer key "address".
-→ REQUIRED before booking — the survey cannot run without it.
-→ If they hesitate, reassure: it's only to prep their custom layout, no spam.
 
 Q6 — CURRENT SETUP:
 "Do you currently have any cameras or security system in place, 
@@ -294,25 +286,18 @@ Return ONLY valid JSON. No preamble.
         if result.get("next_question"):
             state.current_question = result["next_question"]
 
+        if result.get("status"):
+            state.status = result["status"]
+
+        if result.get("is_hot_lead"):
+            state.is_hot_lead = True
+            state.add_tag(GHL_TAGS["hot_lead"])
+
         if result.get("answer_recorded"):
             q = result["answer_recorded"].get("question")
             a = result["answer_recorded"].get("answer")
             if q and a:
                 state.answers[q] = a
-
-        proposed = result.get("status")
-        if proposed == "disqualified":
-            if hard_disqualify_confirmed(state, result):
-                state.status = "disqualified"
-            else:
-                state.status = "in_progress"
-                result["action"] = "continue"
-        elif proposed:
-            state.status = proposed
-
-        if result.get("is_hot_lead"):
-            state.is_hot_lead = True
-            state.add_tag(GHL_TAGS["hot_lead"])
 
         # Add Sasha's response to history
         state.conversation_history.append({
