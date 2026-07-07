@@ -244,6 +244,83 @@ def mcp_discovery():
     }), 200
 
 
+
+# ============================================================
+# CAMERA EDITOR — manual override tool
+# ============================================================
+import base64 as _b64
+import sasha_ghl as _ghl
+import sasha_survey as _ss
+import property_survey as _ps
+
+EDITOR_SURVEY_FIELD = "imSV1GG9bTydLcgl16WO"
+
+@app.route("/editor", methods=["GET"])
+def editor_page():
+    try:
+        with open("/root/-av-shield-agents/camera_editor.html") as _fh:
+            return _fh.read(), 200, {"Content-Type": "text/html"}
+    except Exception as _e:
+        return f"editor unavailable: {_e}", 500
+
+@app.route("/editor/load", methods=["GET"])
+def editor_load():
+    cid = request.args.get("contactId", "").strip()
+    if not cid:
+        return jsonify({"error": "contactId required"}), 400
+    try:
+        contact = _ghl.get_contact(cid)
+        name = (contact.get("firstName", "") + " " + contact.get("lastName", "")).strip() or contact.get("contactName", "")
+        addr = contact.get("address1", "") or ""
+        city = contact.get("city", "")
+        st = contact.get("state", "")
+        full = ", ".join([p for p in [addr, city, st] if p]).strip(", ")
+        if not full:
+            return jsonify({"error": "no address on contact"}), 400
+        geo = _ss.geocode_address(full)
+        lat, lng = geo.get("lat", 0), geo.get("lng", 0)
+        if not lat:
+            return jsonify({"error": "could not geocode address"}), 400
+        _zp = request.args.get("zoom", "").strip()
+        zoom = int(_zp) if _zp.isdigit() else _ps.zoom_for_area(lat, 0)
+        zoom = max(16, min(21, zoom))
+        img = _ps.fetch_satellite(lat, lng, zoom).convert("RGB").resize((640, 640))
+        _buf = __import__("io").BytesIO()
+        img.save(_buf, format="PNG")
+        b64 = _b64.b64encode(_buf.getvalue()).decode()
+        try:
+            _fpp = _ps.feet_per_pixel(lat, zoom)
+            _cone = (100.0 / _fpp) / 640.0 * 100 if _fpp else 12.0
+        except Exception:
+            _cone = 12.0
+        return jsonify({
+            "imageUrl": "data:image/png;base64," + b64,
+            "cameras": [],
+            "contactName": name or cid,
+            "zoom": zoom,
+            "coneRadiusPct": round(_cone, 2),
+        })
+    except Exception as _e:
+        return jsonify({"error": str(_e)}), 500
+
+@app.route("/editor/save", methods=["POST"])
+def editor_save():
+    data = request.get_json(force=True) or {}
+    cid = (data.get("contactId") or "").strip()
+    img_data = data.get("imageDataUrl", "")
+    if not cid or not img_data:
+        return jsonify({"error": "contactId and imageDataUrl required"}), 400
+    try:
+        b64 = img_data.split(",", 1)[-1]
+        raw = _b64.b64decode(b64)
+        out = f"/root/-av-shield-agents/editor_{cid}.png"
+        with open(out, "wb") as _fh:
+            _fh.write(raw)
+        ok = _ghl.upload_to_contact(out, cid, EDITOR_SURVEY_FIELD)
+        return jsonify({"ok": bool(ok)})
+    except Exception as _e:
+        return jsonify({"error": str(_e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=443,
         ssl_context=(

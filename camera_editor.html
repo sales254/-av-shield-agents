@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AV Shield — Camera Editor</title>
+<style>
+  :root{
+    --bg:#0e0f13; --panel:#171922; --line:#262a36; --ink:#e7e9ee;
+    --muted:#8b90a0; --red:#e2201a; --red-dim:#8f1712; --ok:#1f9d55;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:12px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  header .brand{font-weight:800;letter-spacing:.5px}
+  header .brand span{color:var(--red)}
+  header .sp{flex:1}
+  .wrap{display:flex;gap:16px;padding:16px;flex-wrap:wrap}
+  .stage{position:relative;flex:1;min-width:320px;background:#000;
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    user-select:none;touch-action:none}
+  .stage img{display:block;width:100%;height:auto;pointer-events:none}
+  .cam{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;
+    cursor:grab;display:grid;place-items:center;transition:transform .05s}
+  .cam:active{cursor:grabbing;transform:scale(1.12)}
+  .cam svg{width:34px;height:34px;filter:drop-shadow(0 1px 3px rgba(0,0,0,.8))}
+  .cam .lbl{position:absolute;top:-16px;font-size:11px;font-weight:700;
+    color:#fff;background:var(--red);padding:0 5px;border-radius:4px;
+    white-space:nowrap}
+  .cam.sel svg circle{stroke:#fff}
+  .cam .icon{display:grid;place-items:center;width:34px;height:34px}
+  .cam .handle{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;border:2px solid #e2201a;cursor:crosshair;box-shadow:0 1px 3px rgba(0,0,0,.7)}
+  aside{width:280px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:14px;height:fit-content}
+  aside h3{margin:0 0 10px;font-size:13px;color:var(--muted);
+    text-transform:uppercase;letter-spacing:.6px}
+  .row{display:flex;gap:8px;margin-bottom:8px}
+  button{font:inherit;font-weight:700;border:1px solid var(--line);
+    background:#20242f;color:var(--ink);padding:9px 12px;border-radius:8px;
+    cursor:pointer;flex:1}
+  button:hover{border-color:#39405233}
+  button.red{background:var(--red);border-color:var(--red)}
+  button.red:hover{background:var(--red-dim)}
+  button.ghost{background:transparent}
+  .count{font-size:28px;font-weight:800;margin:4px 0 12px}
+  .count small{font-size:12px;color:var(--muted);font-weight:600;
+    display:block;text-transform:uppercase;letter-spacing:.6px}
+  .status{margin-top:12px;font-size:12px;padding:8px 10px;border-radius:8px;
+    background:#12141b;border:1px solid var(--line);color:var(--muted)}
+  .status.ok{color:#7fe0a5;border-color:#1f9d5533}
+  .status.err{color:#ff9c96;border-color:#e2201a33}
+  .hint{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
+  .field{margin-bottom:10px}
+  .field label{display:block;font-size:11px;color:var(--muted);
+    margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+  .field input{width:100%;background:#12141b;border:1px solid var(--line);
+    color:var(--ink);padding:8px;border-radius:7px;font:inherit}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">AV <span>SHIELD</span> · Camera Editor</div>
+  <div class="sp"></div>
+  <div id="contactTag" class="hint"></div>
+</header>
+
+<div class="wrap">
+  <div id="stage" class="stage">
+    <img id="surveyImg" alt="survey">
+    <svg id="cones" viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"></svg>
+  </div>
+
+  <aside>
+    <div class="count"><span id="camCount">0</span><small>Cameras placed</small></div>
+    <div class="row">
+      <button id="addBtn" class="ghost">+ Add camera</button>
+      <button id="delBtn" class="ghost">Delete selected</button>
+    </div>
+    <div class="row">
+      <button id="addBridge" class="ghost">+ Bridge</button>
+      <button id="addSwitch" class="ghost">+ Switch</button>
+    </div>
+    <div id="rangeRow" style="display:none;flex-direction:column;gap:4px;margin-bottom:8px">
+      <label style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Range: <span id="rangeVal">100</span> ft</label>
+      <input id="rangeSlider" type="range" min="20" max="300" step="5" value="100" style="width:100%">
+    </div>
+    <div class="row">
+      <button id="saveBtn" class="red">Save to GHL</button>
+    </div>
+
+    <h3 style="margin-top:18px">Load</h3>
+    <div class="field">
+      <label>GHL Contact ID</label>
+      <input id="contactId" placeholder="contact id">
+    </div>
+    <div class="row">
+      <button id="loadBtn" class="ghost">Load survey</button>
+    </div>
+    <div class="row" id="zoomRow" style="display:none">
+      <button id="zoomOut" class="ghost">– Zoom out</button>
+      <button id="zoomIn" class="ghost">Zoom in +</button>
+    </div>
+
+    <div id="status" class="status">Ready.</div>
+    <div class="hint">Drag any camera to reposition. Click to select, then Delete. Save uploads the marked image + count to the GHL contact.</div>
+  </aside>
+</div>
+
+<script>
+// ---- CONFIG: point this at your droplet save/load endpoint ----
+const API_BASE = "";
+// Endpoints expected on the droplet (keys stay server-side):
+//   GET  /editor/load?contactId=XXX  -> {imageUrl, cameras:[{x,y}], contactName}
+//   POST /editor/save                -> {contactId, cameras, imageDataUrl}
+// ---------------------------------------------------------------
+
+const CAM_SVG = `<svg viewBox="0 0 24 24" fill="none">
+  <circle cx="12" cy="12" r="11" fill="#e2201a" stroke="#000" stroke-width="1"/>
+  <path d="M6 9.5h7l3-1.6v8.2l-3-1.6H6z" fill="#fff"/>
+</svg>`;
+const BRIDGE_SVG = `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="11" fill="#2b7fff" stroke="#000" stroke-width="1"/><path d="M9 8 L17 12 L9 16 Z" fill="#fff"/></svg>`;
+const SWITCH_SVG = `<svg viewBox="0 0 24 24" fill="none"><rect x="2" y="7" width="20" height="10" rx="2" fill="#1f9d55" stroke="#000" stroke-width="1"/><circle cx="7" cy="12" r="1.4" fill="#fff"/><circle cx="12" cy="12" r="1.4" fill="#fff"/><circle cx="17" cy="12" r="1.4" fill="#fff"/></svg>`;
+function iconFor(t){ return t==='bridge'?BRIDGE_SVG : t==='switch'?SWITCH_SVG : CAM_SVG; }
+
+const stage = document.getElementById('stage');
+const img = document.getElementById('surveyImg');
+const statusEl = document.getElementById('status');
+let cameras = [];       // {x,y} as % of image (0..100)
+let selected = null;
+let drag = null;
+let coneR = 12;
+
+function setStatus(msg, cls=''){ statusEl.className='status '+cls; statusEl.textContent=msg; }
+function updateCount(){
+  const n={camera:0,bridge:0,switch:0};
+  cameras.forEach(o=>{n[o.type||'camera']++;});
+  const el=document.getElementById('camCount');
+  const lbl=document.querySelector('.count small');
+  el.textContent=cameras.length;
+  if(lbl){
+    const parts=[];
+    if(n.camera)parts.push(n.camera+' cam');
+    if(n.bridge)parts.push(n.bridge+' bridge');
+    if(n.switch)parts.push(n.switch+' switch');
+    lbl.textContent=parts.length?parts.join(' · '):'Items placed';
+  }
+}
+
+function render(){
+  [...stage.querySelectorAll('.cam')].forEach(n=>n.remove());
+  const cnt={camera:0,bridge:0,switch:0};
+  cameras.forEach((c,i)=>{
+    const t=c.type||'camera'; cnt[t]++;
+    const pfx=t==='bridge'?'B':t==='switch'?'S':'C';
+    const aims=(t!=='switch');
+    const a=c.angle||0;
+    const el=document.createElement('div');
+    el.className='cam'+(selected===i?' sel':'');
+    el.style.left=c.x+'%'; el.style.top=c.y+'%';
+    const rot=aims?`transform:rotate(${a-90}deg)`:'';
+    el.innerHTML=`<div class="icon" style="${rot}">${iconFor(t)}</div><div class="lbl">${pfx}${cnt[t]}</div>`+(aims?'<div class="handle"></div>':'');
+    if(aims){
+      const d=26, ax=Math.sin(a*Math.PI/180)*d, ay=-Math.cos(a*Math.PI/180)*d;
+      const h=el.querySelector('.handle');
+      h.style.left=(17+ax)+'px'; h.style.top=(17+ay)+'px';
+      h.addEventListener('pointerdown',e=>startRotate(e,i));
+    }
+    el.querySelector('.icon').addEventListener('pointerdown',e=>startDrag(e,i));
+    stage.appendChild(el);
+  });
+  drawCones();
+  updateRangeUI();
+  updateCount();
+}
+function drawCones(){
+  const svg=document.getElementById('cones'); if(!svg)return;
+  let p='';
+  cameras.forEach(c=>{
+    const t=c.type||'camera', a=(c.angle||0);
+    if(t==='camera'){
+      const R=(c.rangeFt||100)/100*coneR, hf=45;
+      const a1=(a-hf)*Math.PI/180, a2=(a+hf)*Math.PI/180;
+      const x1=c.x+Math.sin(a1)*R, y1=c.y-Math.cos(a1)*R;
+      const x2=c.x+Math.sin(a2)*R, y2=c.y-Math.cos(a2)*R;
+      p+=`<path d="M${c.x} ${c.y} L${x1} ${y1} A ${R} ${R} 0 0 1 ${x2} ${y2} Z" fill="rgba(226,32,26,0.20)" stroke="rgba(226,32,26,0.85)" stroke-width="0.4"/>`;
+    }else if(t==='bridge'){
+      const L=18, x2=c.x+Math.sin(a*Math.PI/180)*L, y2=c.y-Math.cos(a*Math.PI/180)*L;
+      p+=`<line x1="${c.x}" y1="${c.y}" x2="${x2}" y2="${y2}" stroke="rgba(43,127,255,0.9)" stroke-width="0.6" stroke-dasharray="1.5 1"/>`;
+    }
+  });
+  svg.innerHTML=p;
+}
+
+let rot=null;
+function startDrag(e,i){
+  e.preventDefault(); e.stopPropagation(); selected=i; drag=i;
+  e.target.closest('.cam').setPointerCapture(e.pointerId);
+  render();
+}
+function startRotate(e,i){
+  e.preventDefault(); e.stopPropagation(); selected=i; rot=i;
+  e.target.setPointerCapture(e.pointerId);
+  render();
+}
+stage.addEventListener('pointermove',e=>{
+  const r=img.getBoundingClientRect();
+  if(drag!==null){
+    let x=((e.clientX-r.left)/r.width)*100;
+    let y=((e.clientY-r.top)/r.height)*100;
+    cameras[drag].x=Math.max(0,Math.min(100,x));
+    cameras[drag].y=Math.max(0,Math.min(100,y));
+    render();
+  }else if(rot!==null){
+    const cam=cameras[rot];
+    const cx=r.left+cam.x/100*r.width, cy=r.top+cam.y/100*r.height;
+    let a=Math.atan2(e.clientX-cx, -(e.clientY-cy))*180/Math.PI;
+    if(a<0)a+=360;
+    cam.angle=Math.round(a);
+    render();
+  }
+});
+stage.addEventListener('pointerup',()=>{drag=null;rot=null;});
+
+document.getElementById('addBtn').onclick=()=>{
+  cameras.push({x:50,y:50,angle:0,rangeFt:100}); selected=cameras.length-1; render();
+  setStatus('Camera added — drag into place.');
+};
+document.getElementById('addBridge').onclick=()=>{
+  cameras.push({x:50,y:50,angle:0,type:'bridge'}); selected=cameras.length-1; render();
+  setStatus('Bridge added — drag + aim.');
+};
+document.getElementById('addSwitch').onclick=()=>{
+  cameras.push({x:50,y:50,type:'switch'}); selected=cameras.length-1; render();
+  setStatus('Switch added — drag into place.');
+};
+document.getElementById('delBtn').onclick=()=>{
+  if(selected===null){setStatus('Select a camera first.','err');return;}
+  cameras.splice(selected,1); selected=null; render();
+  setStatus('Camera deleted.');
+};
+
+let currentZoom=null;
+async function loadSurvey(zoom){
+  const id=document.getElementById('contactId').value.trim();
+  if(!id){setStatus('Enter a contact ID.','err');return;}
+  setStatus('Loading survey…');
+  let url=`${API_BASE}/editor/load?contactId=${encodeURIComponent(id)}`;
+  if(zoom!=null) url+=`&zoom=${zoom}`;
+  try{
+    const r=await fetch(url);
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+    img.src=d.imageUrl; if(zoom==null){cameras=d.cameras||[];} selected=null;
+    currentZoom=d.zoom; coneR=d.coneRadiusPct||coneR;
+    document.getElementById('zoomRow').style.display='flex';
+    document.getElementById('contactTag').textContent=d.contactName?('Contact: '+d.contactName):('ID: '+id);
+    img.onload=()=>{render();setStatus('Survey loaded (zoom '+currentZoom+').','ok');};
+  }catch(err){setStatus('Load failed: '+err.message,'err');}
+}
+document.getElementById('loadBtn').onclick=()=>loadSurvey(null);
+document.getElementById('zoomIn').onclick=()=>{ if(currentZoom!=null) loadSurvey(Math.min(21,currentZoom+1)); };
+document.getElementById('zoomOut').onclick=()=>{ if(currentZoom!=null) loadSurvey(Math.max(16,currentZoom-1)); };
+
+document.getElementById('saveBtn').onclick=async()=>{
+  const id=document.getElementById('contactId').value.trim();
+  if(!id){setStatus('Enter a contact ID.','err');return;}
+  if(!img.src){setStatus('Load a survey first.','err');return;}
+  setStatus('Rendering + saving…');
+  try{
+    const dataUrl=await burnImage();
+    const r=await fetch(`${API_BASE}/editor/save`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contactId:id,cameras,imageDataUrl:dataUrl})
+    });
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    setStatus('Saved to GHL ✓','ok');
+  }catch(err){setStatus('Save failed: '+err.message,'err');}
+};
+
+// Draw image + camera markers onto a canvas -> dataURL for upload
+function burnImage(){
+  return new Promise((res,rej)=>{
+    const c=document.createElement('canvas');
+    c.width=img.naturalWidth; c.height=img.naturalHeight;
+    const ctx=c.getContext('2d');
+    ctx.drawImage(img,0,0);
+    const RAD=Math.max(14,c.width*0.012);
+    const cnt={camera:0,bridge:0,switch:0};
+    cameras.forEach((cam)=>{
+      const t=cam.type||'camera', x=cam.x/100*c.width, y=cam.y/100*c.height, a=(cam.angle||0);
+      if(t==='camera'){
+        const R=((cam.rangeFt||100)/100*coneR)/100*c.width;
+        const t1=(a-45-90)*Math.PI/180, t2=(a+45-90)*Math.PI/180;
+        ctx.beginPath();ctx.moveTo(x,y);ctx.arc(x,y,R,t1,t2);ctx.closePath();
+        ctx.fillStyle='rgba(226,32,26,0.20)';ctx.fill();
+        ctx.strokeStyle='rgba(226,32,26,0.85)';ctx.lineWidth=Math.max(1,R*0.02);ctx.stroke();
+      }else if(t==='bridge'){
+        const L=0.18*c.width, ex=x+Math.sin(a*Math.PI/180)*L, ey=y-Math.cos(a*Math.PI/180)*L;
+        ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(ex,ey);
+        ctx.strokeStyle='rgba(43,127,255,0.9)';ctx.lineWidth=Math.max(1,RAD*0.15);
+        ctx.setLineDash([RAD*0.6,RAD*0.4]);ctx.stroke();ctx.setLineDash([]);
+      }
+    });
+    cameras.forEach((cam)=>{
+      const t=cam.type||'camera', x=cam.x/100*c.width, y=cam.y/100*c.height, a=(cam.angle||0)*Math.PI/180;
+      cnt[t]++;
+      const col=t==='bridge'?'#2b7fff':t==='switch'?'#1f9d55':'#e2201a';
+      const pfx=t==='bridge'?'B':t==='switch'?'S':'C';
+      if(t!=='switch'){
+        const ax=Math.sin(a), ay=-Math.cos(a), px=-ay, py=ax;
+        ctx.beginPath();
+        ctx.moveTo(x+ax*RAD*2.1, y+ay*RAD*2.1);
+        ctx.lineTo(x+px*RAD*0.85, y+py*RAD*0.85);
+        ctx.lineTo(x-px*RAD*0.85, y-py*RAD*0.85);
+        ctx.closePath();ctx.fillStyle=col;ctx.fill();
+        ctx.lineWidth=RAD*0.1;ctx.strokeStyle='#000';ctx.stroke();
+      }
+      if(t==='switch'){
+        const w=RAD*1.9,h=RAD*1.25;
+        ctx.beginPath();ctx.rect(x-w/2,y-h/2,w,h);
+        ctx.fillStyle=col;ctx.fill();ctx.lineWidth=RAD*0.12;ctx.strokeStyle='#000';ctx.stroke();
+      }else{
+        ctx.beginPath();ctx.arc(x,y,RAD,0,7);ctx.fillStyle=col;ctx.fill();
+        ctx.lineWidth=RAD*0.12;ctx.strokeStyle='#000';ctx.stroke();
+      }
+      ctx.fillStyle='#fff';ctx.font=`bold ${RAD*0.85}px sans-serif`;
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText(pfx+cnt[t],x,y);
+    });
+    (function(){
+      const present=[...new Set(cameras.map(o=>o.type||'camera'))];
+      const meta={camera:['#e2201a','Camera'],bridge:['#2b7fff','Bridge'],switch:['#1f9d55','Switch']};
+      const items=['camera','bridge','switch'].filter(t=>present.includes(t)).map(t=>meta[t]);
+      if(!items.length)return;
+      const fs=Math.max(16,c.width*0.022), pad=fs*0.7, sw=fs*0.9, gap=fs*0.5, rowH=fs*1.5;
+      ctx.font=`bold ${fs}px sans-serif`;
+      let maxw=0; items.forEach(it=>{maxw=Math.max(maxw,ctx.measureText(it[1]).width);});
+      const boxW=pad*2+sw+gap+maxw, boxH=pad*2+rowH*items.length-(rowH-fs), bx=pad, by=pad;
+      ctx.fillStyle='rgba(0,0,0,0.62)';ctx.fillRect(bx,by,boxW,boxH);
+      ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=Math.max(1,fs*0.05);ctx.strokeRect(bx,by,boxW,boxH);
+      items.forEach((it,i)=>{
+        const cy=by+pad+rowH*i+fs*0.5, cx=bx+pad+sw*0.5;
+        ctx.fillStyle=it[0];
+        if(it[1]==='Switch'){ctx.fillRect(cx-sw*0.5,cy-sw*0.4,sw,sw*0.8);ctx.strokeStyle='#000';ctx.lineWidth=Math.max(1,fs*0.06);ctx.strokeRect(cx-sw*0.5,cy-sw*0.4,sw,sw*0.8);}
+        else{ctx.beginPath();ctx.arc(cx,cy,sw*0.45,0,7);ctx.fill();ctx.strokeStyle='#000';ctx.lineWidth=Math.max(1,fs*0.06);ctx.stroke();}
+        ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='middle';ctx.font=`bold ${fs}px sans-serif`;
+        ctx.fillText(it[1],bx+pad+sw+gap,cy);
+      });
+    })();
+    try{res(c.toDataURL('image/jpeg',0.9));}catch(e){rej(e);}
+  });
+}
+
+function updateRangeUI(){
+  const row=document.getElementById('rangeRow');
+  const sl=document.getElementById('rangeSlider');
+  const vv=document.getElementById('rangeVal');
+  if(selected===null||!cameras[selected]||(cameras[selected].type||'camera')!=='camera'){row.style.display='none';return;}
+  row.style.display='flex';
+  const ft=cameras[selected].rangeFt||100;
+  sl.value=ft; vv.textContent=ft;
+}
+document.getElementById('rangeSlider').oninput=(e)=>{
+  if(selected===null||!cameras[selected])return;
+  cameras[selected].rangeFt=parseInt(e.target.value);
+  document.getElementById('rangeVal').textContent=e.target.value;
+  render();
+};
+setStatus('Ready. Enter a contact ID and Load.');
+</script>
+</body>
+</html>

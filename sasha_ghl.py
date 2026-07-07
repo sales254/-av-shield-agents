@@ -605,3 +605,19 @@ def send_estimate(estimate_id):
                       headers=_est_headers(), data=json.dumps(body))
     print(f"[send] action=sms_and_email status={r.status_code} email={email!r}", flush=True)
     return r.status_code in (200, 201)
+
+
+def get_contact(contact_id: str) -> dict:
+    """Fetch a full contact record by ID. Returns {} on failure."""
+    try:
+        resp = requests.get(
+            f"{GHL_BASE_URL}/contacts/{contact_id}",
+            headers=get_headers(),
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("contact", {}) or {}
+        print(f"[GHL] get_contact {resp.status_code}: {resp.text[:150]}")
+    except Exception as e:
+        print(f"[GHL] get_contact error: {e}")
+    return {}
