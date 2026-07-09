@@ -51,3 +51,4 @@ test_results/
 .env 
 .env.txt 
 config.py 
+survey_*.png

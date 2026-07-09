@@ -321,6 +321,51 @@ def editor_save():
     except Exception as _e:
         return jsonify({"error": str(_e)}), 500
 
+
+# ============================================================
+# RUN-SURVEY — survey only (already-qualified leads: phone, web, form)
+# No qualifier questions. GHL fires this via webhook after qualifying.
+# ============================================================
+@app.route("/run-survey", methods=["POST"])
+def run_survey_endpoint():
+    data = request.get_json(force=True, silent=True) or {}
+    cid = (data.get("contactId") or data.get("contact_id") or "").strip()
+    if not cid:
+        return jsonify({"error": "contactId required"}), 400
+    try:
+        import sasha_ghl as _g
+        from sasha_survey import VisualSurveyAgent, SurveyState
+        contact = _g.get_contact(cid)
+        if not contact:
+            return jsonify({"error": "contact not found"}), 404
+        name = ((contact.get("firstName", "") + " " + contact.get("lastName", "")).strip()
+                or contact.get("contactName", "") or "there")
+        # address: prefer explicit fields, then assemble
+        addr = data.get("address", "") or contact.get("address1", "") or ""
+        city = contact.get("city", ""); st = contact.get("state", ""); zp = contact.get("postalCode", "")
+        full = ", ".join([p for p in [addr, city, st, zp] if p]).strip(", ")
+        if not full or len(full) < 6:
+            return jsonify({"error": "no usable address on contact"}), 400
+        state = SurveyState(
+            contact_name=name,
+            phone=contact.get("phone", "") or "",
+            contact_id=cid,
+            address=full,
+            property_type=data.get("propertyType", "") or "commercial",
+        )
+        # queue so GHL gets an instant 200 (survey takes time + credits)
+        def _bg():
+            try:
+                VisualSurveyAgent().analyze_property(state)
+                print(f"[RUN-SURVEY] done for {cid} ({full})")
+            except Exception as _e:
+                print(f"[RUN-SURVEY] error for {cid}: {_e}")
+        import threading as _t
+        _t.Thread(target=_bg, daemon=True).start()
+        return jsonify({"status": "survey_started", "contactId": cid, "address": full})
+    except Exception as _e:
+        return jsonify({"error": str(_e)}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=443,
         ssl_context=(
