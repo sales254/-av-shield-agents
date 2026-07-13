@@ -69,6 +69,12 @@ Pillow>=10.2.0                     # Image handling for property photos
 cryptography>=42.0.0               # Secure credential handling
 
 # ------------------------------------------------------------
+# NETWORK DEVICE CONTROL — Reyee/Ruijie Cloud adapter (Phase 5)
+# ------------------------------------------------------------
+playwright>=1.44.0                 # Headless Chromium automation of the portal
+                                   # After install: playwright install chromium
+
+# ------------------------------------------------------------
 # PRODUCTION ONLY
 # ------------------------------------------------------------
 supervisor>=4.2.0                  # Keeps agents running 24/7

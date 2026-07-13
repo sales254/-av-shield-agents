@@ -48,7 +48,13 @@ Thumbs.db
 # Test output
 test_results/
 *.test.json
-.env 
-.env.txt 
-config.py 
+.env
+.env.txt
+config.py
 survey_*.png
+
+# Reyee adapter — persistent Playwright session (contains auth cookies)
+storage_state*.json
+# ...but the adapter's config MODULE must be tracked (the bare config.py rule
+# above would otherwise ignore it).
+!av_shield_agents/config.py
